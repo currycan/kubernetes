@@ -1,4 +1,4 @@
-# kubeadm 安装部署 kubernetes 1.10.3
+# kubeadm 安装部署 kubernetes 1.14.0
 
 ## 1. 安装准备
 
@@ -43,56 +43,103 @@ echo "* hard memlock  unlimited"  >> /etc/security/limits.conf
 ### 1.3 系统设置
 ```shell
 # 关闭防火墙，swap，selinux
-systemctl stop firewalld && systemctl disable firewalld
-swapoff -a && sysctl -w vm.swappiness=0
-rm -rf $(swapon -s | awk 'NR>1{print $1}')
-sed -i 's/.*swap.*/#&/' /etc/fstab
+systemctl disable --now firewalld NetworkManager
 setenforce 0
-sed -i /etc/selinux/config -r -e 's/^SELINUX=.*/SELINUX=disabled/g'
+sed -ri '/^[^#]*SELINUX=/s#=.+$#=disabled#' /etc/selinux/config
+systemctl disable --now dnsmasq
+
+sed -i "13i exclude=kernel*" /etc/yum.conf
+yum install epel-release -y
+yum install -y wget git jq psmisc socat ipvsadm ipset sysstat conntrack libseccomp
+yum update -y
+
+# 升级内核
+rpm -Uvh https://elrepo.org/linux/kernel/el7/x86_64/RPMS/kernel-lt-4.4.177-1.el7.elrepo.x86_64.rpm
+grub2-set-default  0 && grub2-mkconfig -o /etc/grub2.cfg
+grubby --default-kernel
+
 reboot
 ```
+**加载内核模块**
+```shell
+:> /etc/modules-load.d/ipvs.conf
+module=(
+  ip_vs
+  ip_vs_lc
+  ip_vs_wlc
+  ip_vs_rr
+  ip_vs_wrr
+  ip_vs_lblc
+  ip_vs_lblcr
+  ip_vs_dh
+  ip_vs_sh
+  ip_vs_fo
+  ip_vs_nq
+  ip_vs_sed
+  ip_vs_ftp
+  )
+for kernel_module in ${module[@]};do
+    /sbin/modinfo -F filename $kernel_module |& grep -qv ERROR && echo $kernel_module >> /etc/modules-load.d/ipvs.conf || :
+done
+systemctl enable --now systemd-modules-load.service
+nl /etc/modules-load.d/ipvs.conf
+systemctl status systemd-modules-load.service -l
+```
+上面如果'systemctl enable'命令报错可以'systemctl status -l systemd-modules-load.service'看看哪个内核模块加载不了,在'/etc/modules-load.d/ipvs.conf'里注释掉它再enable试试
+
 **Tips:**
 因为测试主机上还运行其他服务，关闭swap可能会对其他服务产生影响，所以建议修改kubelet的启动参数
-
-    --fail-swap-on=false
+```
+--fail-swap-on=false
+```
 
  去掉这个限制。修改
-
-    /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+```
+/etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+```
 
 加入：
-
-    # 已经安装好kubernetes环境
-    cat << EOL >> /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
-    Environment="KUBELET_EXTRA_ARGS=--fail-swap-on=false"
-    EOL
-    systemctl daemon-reload && systemctl restrt kubelet
+```
+# 已经安装好kubernetes环境
+cat << EOL >> /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+Environment="KUBELET_EXTRA_ARGS=--fail-swap-on=false"
+EOL
+systemctl daemon-reload && systemctl restrt kubelet
+```
 
 ### 1.4 调整内核参数,解决路由异常
-
-    cat <<EOF >  /etc/sysctl.d/k8s.conf
-    net.ipv4.ip_forward = 1
-    net.bridge.bridge-nf-call-ip6tables = 1
-    net.bridge.bridge-nf-call-iptables = 1
-    EOF
-    modprobe br_netfilter
-    sysctl -p /etc/sysctl.d/k8s.conf
+```shell
+cat <<EOF >  /etc/sysctl.d/k8s.conf
+net.ipv4.ip_forward = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+EOF
+modprobe br_netfilter
+sysctl -p /etc/sysctl.d/k8s.conf
+```
 
 ## 2 安装
 
 ### 2.1 安装docker
+
+检查系统内核和模块是否适合运行 docker (仅适用于 linux 系统)
+```
+curl https://raw.githubusercontent.com/docker/docker/master/contrib/check-config.sh > check-config.sh
+bash ./check-config.sh
+```
+
 ```shell
 # 删除残留（如果之前有安装过docker）
 yum remove docker -y \
-                    docker-client \
-                    docker-client-latest \
-                    docker-common \
-                    docker-latest \
-                    docker-latest-logrotate \
-                    docker-logrotate \
-                    docker-selinux \
-                    docker-engine-selinux \
-                    docker-engine
+                docker-client \
+                docker-client-latest \
+                docker-common \
+                docker-latest \
+                docker-latest-logrotate \
+                docker-logrotate \
+                docker-selinux \
+                docker-engine-selinux \
+                docker-engine
 # 此步骤会删除所有数据，慎做
 rm -rf /var/lib/docker
 
@@ -102,8 +149,8 @@ yum-config-manager --add-repo http://mirrors.aliyun.com/docker-ce/linux/centos/d
 yum list docker-ce --showduplicates | sort -r
 yum install -y docker-ce
 
-systemctl enable docker
-systemctl daemon-reload && systemctl start docker
+\cp -a /usr/share/bash-completion/completions/docker /etc/bash_completion.d/
+systemctl enable --now docker
 systemctl status docker -l
 
 cat << EOF > /etc/docker/daemon.json
@@ -158,129 +205,197 @@ repo_gpgcheck=1
 gpgkey=https://mirrors.aliyun.com/kubernetes/yum/doc/yum-key.gpg https://mirrors.aliyun.com/kubernetes/yum/doc/rpm-package-key.gpg
 EOF
 
-yum install -y kubeadm kubelet kubectl
-sed -i "s/cgroup-driver=systemd/cgroup-driver=cgroupfs/g" /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
-systemctl enable kubelet.service && systemctl start kubelet.service
+yum install -y kubelet kubeadm kubectl --disableexcludes=kubernetes
+sed '5i Environment="KUBELET_CGROUP_ARGS=--cgroup-driver=cgroupfs"' -i /usr/lib/systemd/system/kubelet.service.d/10-kubeadm.conf
+systemctl enable kubelet
 ```
+注意，这里不需要启动kubelet，初始化的过程中会自动启动的，如果此时启动了会出现如下报错，忽略即可。日志在tail -f /var/log/messages
+```
+Apr  2 20:44:41 just-test kubelet: F0402 20:44:41.022247    5858 server.go:193] failed to load Kubelet config file /var/lib/kubelet/config.yaml, error failed to read kubelet config file "/var/lib/kubelet/config.yaml", error: open /var/lib/kubelet/config.yaml: no such file or directory
+```
+
 ### 2.3 下载gcr.io镜像
 
-下载镜像并push到harbor私有仓
+kubeadm init 命令默认使用的docker镜像仓库为k8s.gcr.io，国内无法直接访问，于是需要变通一下。首先查看需要使用哪些镜像
 ```shell
-cat <<EOF > k8s-images.sh
-#!/bin/bash
-set -o errexit
-# set -o nounset
-set -o pipefail
+[root@just-test ~]# kubeadm config images list
+k8s.gcr.io/kube-apiserver:v1.14.0
+k8s.gcr.io/kube-controller-manager:v1.14.0
+k8s.gcr.io/kube-scheduler:v1.14.0
+k8s.gcr.io/kube-proxy:v1.14.0
+k8s.gcr.io/pause:3.1
+k8s.gcr.io/etcd:3.3.10
+k8s.gcr.io/coredns:1.3.1
+```
+可以通过 docker.io/mirrorgooglecontainers 中转一下
+注：coredns没包含在docker.io/mirrorgooglecontainers中，需要手工从coredns官方镜像转换下。
 
-KUBE_VERSION=v1.10.3
-KUBE_PAUSE_VERSION=3.1
-ETCD_VERSION=3.1.12
-DNS_VERSION=1.14.8
-DASHBOARD=v1.8.3
-HEAPSTER=v1.5.3
-HS_INFLUXDB=v1.3.3
-HS_GRAFANA=v4.4.3
-CALICO_NODE=v3.0.7
-CALICO_KUBE_CONTROLLERS=v2.0.4
-CALICO_CNI=v2.0.5
-COREOS_ETCD=v3.1.10
+批量下载及转换标签，脚本如下
+```shell
+kubeadm config images list |sed -e 's/^/docker pull /g' -e 's#k8s.gcr.io#docker.io/mirrorgooglecontainers#g' |sh -x
+docker images |grep mirrorgooglecontainers |awk '{print "docker tag ",$1":"$2,$1":"$2}' |sed -e 's#[docker.io/]*mirrorgooglecontainers#k8s.gcr.io#2' |sh -x
+docker images |grep mirrorgooglecontainers |awk '{print "docker rmi ", $1":"$2}' |sh -x
+docker pull coredns/coredns:1.3.1
+docker tag coredns/coredns:1.3.1 k8s.gcr.io/coredns:1.3.1
+docker rmi coredns/coredns:1.3.1
+```
+分解步骤
+```shell
+[root@just-test ~]# kubeadm config images list |sed -e 's/^/docker pull /g' -e 's#k8s.gcr.io#docker.io/mirrorgooglecontainers#g' |sh -x
++ docker pull docker.io/mirrorgooglecontainers/kube-apiserver:v1.14.0
+v1.14.0: Pulling from mirrorgooglecontainers/kube-apiserver
+1552c1d94162: Pull complete
+c3f0381da60f: Pull complete
+Digest: sha256:3bf082bfadff726fcb2e8acb32d640b836839cb121d29d62f50c072e7ef65be2
+Status: Downloaded newer image for mirrorgooglecontainers/kube-apiserver:v1.14.0
++ docker pull docker.io/mirrorgooglecontainers/kube-controller-manager:v1.14.0
+v1.14.0: Pulling from mirrorgooglecontainers/kube-controller-manager
+1552c1d94162: Already exists
+792f70ee1bcc: Pull complete
+Digest: sha256:b6b3663d445c9f843e1a104a85d57e8853f03eb8e250c38dfbc1be6888e9eeb1
+Status: Downloaded newer image for mirrorgooglecontainers/kube-controller-manager:v1.14.0
++ docker pull docker.io/mirrorgooglecontainers/kube-scheduler:v1.14.0
+v1.14.0: Pulling from mirrorgooglecontainers/kube-scheduler
+1552c1d94162: Already exists
+19de5072ac25: Pull complete
+Digest: sha256:1989038d353e1dc041e1bd219067da133619cbead44484393c3927845ce746ff
+Status: Downloaded newer image for mirrorgooglecontainers/kube-scheduler:v1.14.0
++ docker pull docker.io/mirrorgooglecontainers/kube-proxy:v1.14.0
+v1.14.0: Pulling from mirrorgooglecontainers/kube-proxy
+1552c1d94162: Already exists
+152cd3f507ac: Pull complete
+ee506f620da3: Pull complete
+Digest: sha256:56c56857dbab79470aa37a77cc5190419590ed03ca360883c05189391ec9ff05
+Status: Downloaded newer image for mirrorgooglecontainers/kube-proxy:v1.14.0
++ docker pull docker.io/mirrorgooglecontainers/pause:3.1
+3.1: Pulling from mirrorgooglecontainers/pause
+67ddbfb20a22: Pull complete
+Digest: sha256:59eec8837a4d942cc19a52b8c09ea75121acc38114a2c68b98983ce9356b8610
+Status: Downloaded newer image for mirrorgooglecontainers/pause:3.1
++ docker pull docker.io/mirrorgooglecontainers/etcd:3.3.10
+3.3.10: Pulling from mirrorgooglecontainers/etcd
+860b4e629066: Pull complete
+3de3fe131c22: Pull complete
+12ec62a49b1f: Pull complete
+Digest: sha256:8a82adeb3d0770bfd37dd56765c64d082b6e7c6ad6a6c1fd961dc6e719ea4183
+Status: Downloaded newer image for mirrorgooglecontainers/etcd:3.3.10
++ docker pull docker.io/mirrorgooglecontainers/coredns:1.3.1
+Error response from daemon: pull access denied for mirrorgooglecontainers/coredns, repository does not exist or may require 'docker login'
+```
+下载完成的镜像
+```shell
+[root@just-test ~]# docker images
+REPOSITORY                                       TAG                 IMAGE ID            CREATED             SIZE
+mirrorgooglecontainers/kube-proxy                v1.14.0             5cd54e388aba        7 days ago          82.1MB
+mirrorgooglecontainers/kube-apiserver            v1.14.0             ecf910f40d6e        7 days ago          210MB
+mirrorgooglecontainers/kube-controller-manager   v1.14.0             b95b1efa0436        7 days ago          158MB
+mirrorgooglecontainers/kube-scheduler            v1.14.0             00638a24688b        7 days ago          81.6MB
+mirrorgooglecontainers/etcd                      3.3.10              2c4adeb21b4f        4 months ago        258MB
+mirrorgooglecontainers/pause                     3.1                 da86e6ba6ca1        15 months ago       742kB
+```
+给镜像添加tag
+```shell
+[root@just-test ~]# docker images |grep mirrorgooglecontainers |awk '{print "docker tag ",$1":"$2,$1":"$2}' |sed -e 's#[docker.io/]*mirrorgooglecontainers#k8s.gcr.io#2' |sh -x
++ docker tag mirrorgooglecontainers/kube-proxy:v1.14.0 k8s.gcr.io/kube-proxy:v1.14.0
++ docker tag mirrorgooglecontainers/kube-scheduler:v1.14.0 k8s.gcr.io/kube-scheduler:v1.14.0
++ docker tag mirrorgooglecontainers/kube-apiserver:v1.14.0 k8s.gcr.io/kube-apiserver:v1.14.0
++ docker tag mirrorgooglecontainers/kube-controller-manager:v1.14.0 k8s.gcr.io/kube-controller-manager:v1.14.0
++ docker tag mirrorgooglecontainers/etcd:3.3.10 k8s.gcr.io/etcd:3.3.10
++ docker tag mirrorgooglecontainers/pause:3.1 k8s.gcr.io/pause:3.1
+[root@just-test ~]# docker images
+REPOSITORY                                       TAG                 IMAGE ID            CREATED             SIZE
+mirrorgooglecontainers/kube-proxy                v1.14.0             5cd54e388aba        7 days ago          82.1MB
+k8s.gcr.io/kube-proxy                            v1.14.0             5cd54e388aba        7 days ago          82.1MB
+mirrorgooglecontainers/kube-apiserver            v1.14.0             ecf910f40d6e        7 days ago          210MB
+k8s.gcr.io/kube-apiserver                        v1.14.0             ecf910f40d6e        7 days ago          210MB
+mirrorgooglecontainers/kube-controller-manager   v1.14.0             b95b1efa0436        7 days ago          158MB
+k8s.gcr.io/kube-controller-manager               v1.14.0             b95b1efa0436        7 days ago          158MB
+mirrorgooglecontainers/kube-scheduler            v1.14.0             00638a24688b        7 days ago          81.6MB
+k8s.gcr.io/kube-scheduler                        v1.14.0             00638a24688b        7 days ago          81.6MB
+mirrorgooglecontainers/etcd                      3.3.10              2c4adeb21b4f        4 months ago        258MB
+k8s.gcr.io/etcd                                  3.3.10              2c4adeb21b4f        4 months ago        258MB
+mirrorgooglecontainers/pause                     3.1                 da86e6ba6ca1        15 months ago       742kB
+k8s.gcr.io/pause                                 3.1                 da86e6ba6ca1        15 months ago       742kB
+```
+删除旧的tag
+```shell
+[root@just-test ~]# docker images |grep mirrorgooglecontainers |awk '{print "docker rmi ", $1":"$2}' |sh -x
++ docker rmi mirrorgooglecontainers/kube-proxy:v1.14.0
+Untagged: mirrorgooglecontainers/kube-proxy:v1.14.0
+Untagged: mirrorgooglecontainers/kube-proxy@sha256:56c56857dbab79470aa37a77cc5190419590ed03ca360883c05189391ec9ff05
++ docker rmi mirrorgooglecontainers/kube-apiserver:v1.14.0
+Untagged: mirrorgooglecontainers/kube-apiserver:v1.14.0
+Untagged: mirrorgooglecontainers/kube-apiserver@sha256:3bf082bfadff726fcb2e8acb32d640b836839cb121d29d62f50c072e7ef65be2
++ docker rmi mirrorgooglecontainers/kube-controller-manager:v1.14.0
+Untagged: mirrorgooglecontainers/kube-controller-manager:v1.14.0
+Untagged: mirrorgooglecontainers/kube-controller-manager@sha256:b6b3663d445c9f843e1a104a85d57e8853f03eb8e250c38dfbc1be6888e9eeb1
++ docker rmi mirrorgooglecontainers/kube-scheduler:v1.14.0
+Untagged: mirrorgooglecontainers/kube-scheduler:v1.14.0
+Untagged: mirrorgooglecontainers/kube-scheduler@sha256:1989038d353e1dc041e1bd219067da133619cbead44484393c3927845ce746ff
++ docker rmi mirrorgooglecontainers/etcd:3.3.10
+Untagged: mirrorgooglecontainers/etcd:3.3.10
+Untagged: mirrorgooglecontainers/etcd@sha256:8a82adeb3d0770bfd37dd56765c64d082b6e7c6ad6a6c1fd961dc6e719ea4183
++ docker rmi mirrorgooglecontainers/pause:3.1
+Untagged: mirrorgooglecontainers/pause:3.1
+Untagged: mirrorgooglecontainers/pause@sha256:59eec8837a4d942cc19a52b8c09ea75121acc38114a2c68b98983ce9356b8610
+[root@just-test ~]# docker images
+REPOSITORY                           TAG                 IMAGE ID            CREATED             SIZE
+k8s.gcr.io/kube-proxy                v1.14.0             5cd54e388aba        7 days ago          82.1MB
+k8s.gcr.io/kube-controller-manager   v1.14.0             b95b1efa0436        7 days ago          158MB
+k8s.gcr.io/kube-scheduler            v1.14.0             00638a24688b        7 days ago          81.6MB
+k8s.gcr.io/kube-apiserver            v1.14.0             ecf910f40d6e        7 days ago          210MB
+k8s.gcr.io/etcd                      3.3.10              2c4adeb21b4f        4 months ago        258MB
+k8s.gcr.io/pause                     3.1                 da86e6ba6ca1        15 months ago       742kB
+```
+拉取coredns镜像
+```shell
+[root@just-test ~]# docker pull coredns/coredns:1.3.1
+1.3.1: Pulling from coredns/coredns
+e0daa8927b68: Pull complete
+3928e47de029: Pull complete
+Digest: sha256:02382353821b12c21b062c59184e227e001079bb13ebd01f9d3270ba0fcbf1e4
+Status: Downloaded newer image for coredns/coredns:1.3.1
+[root@just-test ~]# docker images | grep coredns
+coredns/coredns                      1.3.1               eb516548c180        2 months ago        40.3MB
+[root@just-test ~]# docker tag coredns/coredns:1.3.1 k8s.gcr.io/coredns:1.3.1
+[root@just-test ~]# docker rmi coredns/coredns:1.3.1
+Untagged: coredns/coredns:1.3.1
+Untagged: coredns/coredns@sha256:02382353821b12c21b062c59184e227e001079bb13ebd01f9d3270ba0fcbf1e4
+[root@just-test ~]# docker images | grep coredns
+k8s.gcr.io/coredns                   1.3.1               eb516548c180        2 months ago        40.3MB
+```
+查看镜像列表
+```shell
+[root@just-test ~]# docker images
+REPOSITORY                           TAG                 IMAGE ID            CREATED             SIZE
+k8s.gcr.io/kube-proxy                v1.14.0             5cd54e388aba        7 days ago          82.1MB
+k8s.gcr.io/kube-apiserver            v1.14.0             ecf910f40d6e        7 days ago          210MB
+k8s.gcr.io/kube-controller-manager   v1.14.0             b95b1efa0436        7 days ago          158MB
+k8s.gcr.io/kube-scheduler            v1.14.0             00638a24688b        7 days ago          81.6MB
+k8s.gcr.io/coredns                   1.3.1               eb516548c180        2 months ago        40.3MB
+k8s.gcr.io/etcd                      3.3.10              2c4adeb21b4f        4 months ago        258MB
+k8s.gcr.io/pause                     3.1                 da86e6ba6ca1        15 months ago       742kB
+```
 
-GCR_URL=k8s.gcr.io
-CALICO_URL=quay.io/calico
-COREOS_URL=quay.io/coreos
-HARBOR_URL=harbor.iibu.com/kubernetes
+现在已经满足要求了，可以愉快的继续kubeadm init
 
-kube_images=(
-    kube-proxy-amd64:\${KUBE_VERSION}
-    kube-apiserver-amd64:\${KUBE_VERSION}
-    kube-scheduler-amd64:\${KUBE_VERSION}
-    kube-controller-manager-amd64:\${KUBE_VERSION}
-    pause-amd64:\${KUBE_PAUSE_VERSION}
-    etcd-amd64:\${ETCD_VERSION}
-    k8s-dns-dnsmasq-nanny-amd64:\${DNS_VERSION}
-    k8s-dns-sidecar-amd64:\${DNS_VERSION}
-    k8s-dns-kube-dns-amd64:\${DNS_VERSION}
-    kubernetes-dashboard-amd64:\${DASHBOARD}
-    heapster-amd64:\${HEAPSTER}
-    heapster-influxdb-amd64:\${HS_INFLUXDB}
-    heapster-grafana-amd64:\${HS_GRAFANA}
-)
-
-calicao_images=(
-    node:\${CALICO_NODE}
-    kube-controllers:\${CALICO_KUBE_CONTROLLERS}
-    cni:\${CALICO_CNI}
-)
-
-push(){
-    for imageName in \${kube_images[@]} ; do
-    docker pull \$GCR_URL/\$imageName
-    docker tag \$GCR_URL/\$imageName \$HARBOR_URL/\$imageName
-    docker push \$HARBOR_URL/\$imageName
-    # docker rmi \$GCR_URL/\$imageName
-    done
-    for imageName in \${calicao_images[@]} ; do
-    docker pull \$CALICO_URL/\$imageName
-    docker tag \$CALICO_URL/\$imageName \$HARBOR_URL/\$imageName
-    docker push \$HARBOR_URL/\$imageName
-    # docker rmi \$GCR_URL/\$imageName
-    done
-    docker pull \$COREOS_URL/etcd:\${COREOS_ETCD}
-    docker tag \$COREOS_URL/etcd:\${COREOS_ETCD} \$HARBOR_URL/etcd:\${COREOS_ETCD}
-    docker push \$HARBOR_URL/etcd:\${COREOS_ETCD}
-}
-
-pull(){
-    for imageName in \${kube_images[@]} ; do
-    docker pull \$HARBOR_URL/\$imageName
-    docker tag \$HARBOR_URL/\$imageName \$GCR_URL/\$imageName
-    done
-    for imageName in \${calicao_images[@]} ; do
-    docker pull \$HARBOR_URL/\$imageName
-    docker tag \$HARBOR_URL/\$imageName \$CALICO_URL/\$imageName
-    done
-    docker pull \$HARBOR_URL/etcd:\${COREOS_ETCD}
-    docker tag \$HARBOR_URL/etcd:\${COREOS_ETCD} \$COREOS_URL/etcd:\${COREOS_ETCD}
-}
-
-untag(){
-    for imageName in \${kube_images[@]} ; do
-    docker rmi \$HARBOR_URL/\$imageName
-    done
-    for imageName in \${calicao_images[@]} ; do
-    docker rmi \$HARBOR_URL/\$imageName
-    done
-    docker rmi \$HARBOR_URL/etcd:\${COREOS_ETCD}
-}
-
-if [ -n "\$1" ];then
-    if [ \$1 = 'push' ];then
-    push
-    elif [ \$1 = 'pull' ]; then
-    pull
-    elif [ \$1 = 'untag' ]; then
-    untag
-    elif [[ \$1 = '-h' ]] || [[ \$1 = 'help' ]];then
-    echo "Usage: \$0 COMMAND"
-    echo 'Commands:'
-    echo '  push:    push imagses from internet repository to local harbor repository'
-    echo '  pull:    pull imagses from local harbor repository, and then tag it to internet repository'
-    echo '  untag:   remove the local harbor repository tag of imagses'
-    echo '  help:    help infomations'
-    else
-    echo "Error input command,please type '\$0 help' to get help infomations"
-    fi
-else
-    echo "Usage: \$0 COMMAND"
-    echo 'Commands:'
-    echo '  push:    push imagses from internet repository to local harbor repository'
-    echo '  pull:    pull imagses from local harbor repository, and then tag it to internet repository'
-    echo '  untag:   remove the local harbor repository tag of imagses'
-    echo '  help:    help infomations'
-fi
-EOF
-chmod +x k8s-images.sh
-./k8s-images.sh
+另外一种方法是使用kubeadm配置文件，通过在配置文件中指定docker仓库地址，便于内网快速部署。目前处于试验阶段。
+生成配置文件
+```shell
+kubeadm config print-defaults --api-objects ClusterConfiguration >kubeadm.conf
+```
+将配置文件中的`imageRepository: k8s.gcr.io`改为你自己的私有`docker`仓库，比如`imageRepository: docker.io/mirrorgooglecontainers`
+`kubeadm`生成的配置文件目前不够完善，需要修改`kubernetes`版本
+`kubernetesVersion: v1.12.0`改为`kubernetesVersion: v1.12.2`
+然后运行命令
+```shell
+kubeadm config images list --config kubeadm.conf
+kubeadm config images pull --config kubeadm.conf
+kubeadm init --config kubeadm.conf
+```
+更多kubeadm配置文件参数详见
+```shell
+kubeadm config print-defaults
 ```
 
 ## 3. 在master上配置
@@ -291,7 +406,7 @@ chmod +x k8s-images.sh
 - apiserver-advertise-address该参数一般指定为haproxy+keepalived 的vip。
 - pod-network-cidr 主要是在搭建pod network（calico）时候需要在init时候指定。
 ```shell
-    [root@app5-185 kubernetes]# kubeadm init --kubernetes-version=v1.10.3 --feature-gates=CoreDNS=true --apiserver-advertise-address=192.168.39.227 --pod-network-cidr=10.244.0.0/16
+    [root@app5-185 kubernetes]# kubeadm init --kubernetes-version=v1.14.0 --feature-gates=CoreDNS=true --apiserver-advertise-address=192.168.39.227 --pod-network-cidr=10.244.0.0/16
     [init] Using Kubernetes version: v1.10.3
     [init] Using Authorization modes: [Node RBAC]
     [preflight] Running pre-flight checks.
