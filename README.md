@@ -1,6 +1,6 @@
 # kubeadm 安装部署 kubernetes 1.10.3
 
-##1. 安装准备
+## 1. 安装准备
 
 - 系统：centos 7
 
@@ -78,7 +78,7 @@ reboot
     modprobe br_netfilter
     sysctl -p /etc/sysctl.d/k8s.conf
 
-##2 安装
+## 2 安装
 
 ### 2.1 安装docker
 ```shell
@@ -162,7 +162,7 @@ yum install -y kubeadm kubelet kubectl
 sed -i "s/cgroup-driver=systemd/cgroup-driver=cgroupfs/g" /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
 systemctl enable kubelet.service && systemctl start kubelet.service
 ```
-###2.3 下载gcr.io镜像
+### 2.3 下载gcr.io镜像
 
 下载镜像并push到harbor私有仓
 ```shell
@@ -283,9 +283,9 @@ chmod +x k8s-images.sh
 ./k8s-images.sh
 ```
 
-##3. 在master上配置
+## 3. 在master上配置
 
-###3.1 初始化K8S
+### 3.1 初始化K8S
 
 通过kubeadm init命令来初始化，指定一下kubernetes版本，并设置一下pod-network-cidr。此过程，需要从google cloud下载镜像，前面步骤中已做了docker代理，可以翻墙下载加上下载镜像时间，根据网速不同，需要时间不等，完成后如下：
 - apiserver-advertise-address该参数一般指定为haproxy+keepalived 的vip。
@@ -388,7 +388,7 @@ d70f5276d6a8da16dc4c34abaabaaaaec16ec6e1c359722f8a0f2f76eaeb480b
 ```
 
 
-###3.2 安装network addon
+### 3.2 安装network addon
 
 要docker之间能互相通信需要做些配置，这里用calico来实现
 ```shell
@@ -464,11 +464,11 @@ etcd-0               Healthy   {"health": "true"}
     # 删除后重新加入，先运行
     kubeadm reset
 
-##5. 配置dashboard
+## 5. 配置dashboard
 
 默认是没web界面的，可以在master机器上安装一个dashboard插件，实现通过web来管理
 
-###5.1 下载配置文件
+### 5.1 下载配置文件
 ```shell
 wget https://raw.githubusercontent.com/kubernetes/dashboard/master/src/deploy/recommended/kubernetes-dashboard.yaml
 ```
@@ -491,12 +491,12 @@ spec:
     selector:
     k8s-app: kubernetes-dashboard
 ```
-###5.2 安装Dashboard插件
+### 5.2 安装Dashboard插件
 ```shell
 kubectl create -f kubernetes-dashboard.yaml
 ```
 
-###5.3 授予Dashboard账户集群管理权限
+### 5.3 授予Dashboard账户集群管理权限
 
 需要一个管理集群admin的权限，新建kubernetes-dashboard-admin.rbac.yaml文件，内容如下
 ```shell
@@ -555,7 +555,7 @@ token:      eyJhbGciOiJSUzI1NiIsImtpZCI6IiJ9.eyJpc3MiOiJrdWJlcm5ldGVzL3NlcnZpY2V
 ```
 记下这串token，等下登录使用，这个token默认是永久的。
 
-###5.4 找出Dashboard服务所在主机和端口
+### 5.4 找出Dashboard服务所在主机和端口
 ```shell
 [root@app5-185 kubernetes]# kubectl get pods --all-namespaces -o wide
 NAMESPACE     NAME                                       READY     STATUS    RESTARTS   AGE       IP                NODE
@@ -609,7 +609,7 @@ httpd-app-5fbccd7c6c-75ck4   0/1       Pending   0          34m
 [root@k8s-master ~]# kubectl delete deployment httpd-app
 deployment "httpd-app" deleted
 ```
-##7. 部署heapster插件
+## 7. 部署heapster插件
 ```shell
 mkdir -p ./heapster
 cd ./heapster
@@ -621,9 +621,9 @@ kubectl create -f ./
 ```
 安装完成后，重新登录web界面即可看到。
 
-##8. 卸载
+## 8. 卸载
 ```shell
-## kubectl drain <node name> --delete-local-data --force --ignore-daemonsets
+# kubectl drain <node name> --delete-local-data --force --ignore-daemonsets
 [root@app5-185 kubernetes]# kubectl drain app5-185 --delete-local-data --force --ignore-daemonsets
 node "k8s-master" cordoned
 WARNING: Ignoring DaemonSet-managed pods: calico-etcd-ffwff, calico-node-jsr48, kube-proxy-xfk5z; Deleting pods not managed by ReplicationController, ReplicaSet, Job, DaemonSet or StatefulSet: etcd-k8s-master, kube-apiserver-k8s-master, kube-controller-manager-k8s-master, kube-scheduler-k8s-master; Deleting pods with local storage: kubernetes-dashboard-5bd6f767c7-qsrpf
@@ -634,11 +634,11 @@ pod "calico-kube-controllers-559b575f97-vt69n" evicted
 pod "kube-dns-6f4fd4bdf-22jk4" evicted
 node "k8s-master" drained
 
-## kubectl delete node <node name>
+# kubectl delete node <node name>
 [root@app5-185 kubernetes]# kubectl delete node k8s-master
 node "k8s-master" deleted
 
-## kubeadm reset
+# kubeadm reset
 [root@k8s-master ~]# kubeadm reset
 [preflight] Running pre-flight checks.
 [reset] Stopping the kubelet service.
@@ -649,7 +649,7 @@ node "k8s-master" deleted
 [reset] Deleting files: [/etc/kubernetes/admin.conf /etc/kubernetes/kubelet.conf /etc/kubernetes/controller-manager.conf /etc/kubernetes/scheduler.conf]
 ```
 
-##9. 离线安装镜像
+## 9. 离线安装镜像
 
 保存镜像
 ```shell
