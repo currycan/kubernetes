@@ -101,25 +101,28 @@ kubeadm 安装部署 kubernetes 1.10.3
     systemctl status docker -l
     
     cat << EOF > /etc/docker/daemon.json
-    {
-        "registry-mirrors": [
-            "https://registry.docker-cn.com",
-            "https://8trm4p9x.mirror.aliyuncs.com",
-            "http://010a79c4.m.daocloud.io",
-            "https://docker.mirrors.ustc.edu.cn/"
-        ],
-        "insecure-registries": ["192.168.110.0/24","192.168.39.0/24","192.168.43.0/24","harbor.iibu.com"],
-        "storage-driver": "overlay2",
-        "exec-opts": ["native.cgroupdriver=cgroupfs"],
-        "dns": ["8.8.8.8", "8.8.4.4"],
-        "max-concurrent-downloads": 10,
-        "log-driver": "json-file",
-        "log-level": "warn",
-        "log-opts": {
-           "max-size": "10m",
-           "max-file": "3"
-        }
-    }
+{
+    "registry-mirrors": [
+        "https://registry.docker-cn.com",
+        "https://8trm4p9x.mirror.aliyuncs.com",
+        "http://010a79c4.m.daocloud.io",
+        "https://docker.mirrors.ustc.edu.cn/"
+    ],
+    "insecure-registries": ["harbor.iibu.com","192.168.39.0/24","192.168.43.0/24"],
+    "storage-driver": "overlay2",
+    "storage-opts": ["overlay2.override_kernel_check=true"],
+    "exec-opts": ["native.cgroupdriver=cgroupfs"],
+    "max-concurrent-downloads": 10,
+    "log-driver": "json-file",
+    "log-level": "warn",
+    "metrics-addr" : "0.0.0.0:9323",
+    "experimental" : true,
+    "log-opts": {
+       "max-size": "10m",
+       "max-file": "3"
+    },
+  "data-root": "/var/lib/docker"
+}
     EOF
     systemctl daemon-reload && systemctl restart docker
 
