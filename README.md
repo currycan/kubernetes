@@ -14,7 +14,7 @@
 | node1 | 1 | 2核 2g | 192.168.43.252 | k8s-node1 |
 | node2 | 1 | 2核 2g | 192.168.43.252 | k8s-node2 |
 
-- 硬件配置参考：CPU 2核或以上，内存1.5GB或以上。
+- 硬件配置参考：CPU 2核或以上，内存2GB或以上。
 - 机器最好都在同一个局域网，在三台机器上都设置好hostname
 - 1个cpu的话初始化master的时候会报`[WARNING NumCPU]: the number of available CPUs 1 is less than the required 2`，部署插件或者`pod`时可能会报`warning：FailedScheduling：Insufficient cpu, Insufficient memory`
 
@@ -974,31 +974,7 @@ kubernetes-dashboard   NodePort    10.110.101.45   <none>        443:32666/TCP  
 
 选择令牌，输入刚才的token即可进入
 
-## 6. 测试集群
-
-在master节点上发起个创建应用请求, 这里我们创建个名为httpd-app的应用，镜像为httpd，有两个副本pod允许master创建pod
-
-默认情况下，Master节点不参与工作负载，但如果希望安装出一个All-In-One的k8s环境，则可以执行以下命令，让Master节点也成为一个Node节点：
-```shell
-kubectl taint nodes --all node-role.kubernetes.io/master-
-```
-创建一个httpd服务
-```shell
-kubectl run httpd-app --image=httpd --replicas=2
-```
-查询结果
-```shell
-[root@app5-185 kubernetes]# kubectl get pod
-NAME                         READY     STATUS    RESTARTS   AGE
-httpd-app-5fbccd7c6c-4wh6b   0/1       Pending   0          34m
-httpd-app-5fbccd7c6c-75ck4   0/1       Pending   0          34m
-```
-删除服务
-```shell
-[root@k8s-master ~]# kubectl delete deployment httpd-app
-deployment "httpd-app" deleted
-```
-## 7. 部署heapster插件
+## 6. 部署heapster插件
 ```shell
 mkdir -p ./heapster
 cd ./heapster
@@ -1010,7 +986,7 @@ kubectl create -f ./
 ```
 安装完成后，重新登录web界面即可看到。
 
-## 8. 卸载
+## 7. 卸载
 ```shell
 # kubectl drain <node name> --delete-local-data --force --ignore-daemonsets
 [root@app5-185 kubernetes]# kubectl drain app5-185 --delete-local-data --force --ignore-daemonsets
@@ -1038,51 +1014,56 @@ node "k8s-master" deleted
 [reset] Deleting files: [/etc/kubernetes/admin.conf /etc/kubernetes/kubelet.conf /etc/kubernetes/controller-manager.conf /etc/kubernetes/scheduler.conf]
 ```
 
-## 9. 离线安装镜像
+## 8. 离线安装和保存镜像
 
 保存镜像
 ```shell
-docker save -o kube-controller-manager-amd64.tar gcr.io/google_containers/kube-controller-manager-amd64:v1.9.6
-docker save -o kube-apiserver-amd64.tar gcr.io/google_containers/kube-apiserver-amd64:v1.9.6
-docker save -o kube-proxy-amd64.tar gcr.io/google_containers/kube-proxy-amd64:v1.9.6
-docker save -o kube-scheduler-amd64.tar gcr.io/google_containers/kube-scheduler-amd64:v1.9.6
-docker save -o calico_node.tar quay.io/calico/node:v3.0.3
-docker save -o kube-controllers.tar quay.io/calico/kube-controllers:v2.0.1
-docker save -o calico_cni.tar quay.io/calico/cni:v2.0.1
-docker save -o kubernetes-dashboard-amd64.tar k8s.gcr.io/kubernetes-dashboard-amd64:v1.8.3
-docker save -o etcd-amd64.tar gcr.io/google_containers/etcd-amd64:3.1.11
-docker save -o kube-addon-manager.tar gcr.io/google-containers/kube-addon-manager:v6.5
-docker save -o storage-provisioner.tar gcr.io/k8s-minikube/storage-provisioner:v1.8.0
-docker save -o k8s-dns-sidecar-amd64_1.14.7.tar gcr.io/google_containers/k8s-dns-sidecar-amd64:1.14.7
-docker save -o k8s-dns-kube-dns-amd64.tar gcr.io/google_containers/k8s-dns-kube-dns-amd64:1.14.7
-docker save -o k8s-dns-dnsmasq-nanny-amd64.tar gcr.io/google_containers/k8s-dns-dnsmasq-nanny-amd64:1.14.7
-docker save -o k8s-dns-sidecar-amd64_1.14.5.tar k8s.gcr.io/k8s-dns-sidecar-amd64:1.14.5
-docker save -o k8s-dns-kube-dns-amd64.tar k8s.gcr.io/k8s-dns-kube-dns-amd64:1.14.5
-docker save -o k8s-dns-dnsmasq-nanny-amd64.tar k8s.gcr.io/k8s-dns-dnsmasq-nanny-amd64:1.14.5
-docker save -o etcd.tar quay.io/coreos/etcd:v3.1.10
-docker save -o google_containers_pause-amd64.tar gcr.io/google_containers/pause-amd64:3.0
-docker save -o pause-amd64.tar k8s.gcr.io/pause-amd64:3.0
+docker images | grep -v 'REPOSITORY' | awk '{print "docker save -o " $1".tar " $1":"$2}' | sed -e 's#\/#_#' | sh -x
+
+[root@just-test ~]#  docker images | grep -v 'REPOSITORY' | awk '{print "docker save -o " $1".tar " $1":"$2}' | sed -e 's#\/#_#' | sh -x
++ docker save -o calico_node.tar calico/node:v3.6.1
++ docker save -o calico_cni.tar calico/cni:v3.6.1
++ docker save -o calico_kube-controllers.tar calico/kube-controllers:v3.6.1
++ docker save -o nginx.tar nginx:latest
++ docker save -o k8s.gcr.io_kube-proxy.tar k8s.gcr.io/kube-proxy:v1.14.0
++ docker save -o k8s.gcr.io_kube-apiserver.tar k8s.gcr.io/kube-apiserver:v1.14.0
++ docker save -o k8s.gcr.io_kube-controller-manager.tar k8s.gcr.io/kube-controller-manager:v1.14.0
++ docker save -o k8s.gcr.io_kube-scheduler.tar k8s.gcr.io/kube-scheduler:v1.14.0
++ docker save -o k8s.gcr.io_coredns.tar k8s.gcr.io/coredns:1.3.1
++ docker save -o k8s.gcr.io_kubernetes-dashboard-amd64.tar k8s.gcr.io/kubernetes-dashboard-amd64:v1.10.1
++ docker save -o k8s.gcr.io_etcd.tar k8s.gcr.io/etcd:3.3.10
++ docker save -o k8s.gcr.io_pause.tar k8s.gcr.io/pause:3.1
+[root@just-test ~/images]# ls
+calico_cni.tar               calico_node.tar         k8s.gcr.io_etcd.tar            k8s.gcr.io_kube-controller-manager.tar  k8s.gcr.io_kubernetes-dashboard-amd64.tar  k8s.gcr.io_pause.tar
+calico_kube-controllers.tar  k8s.gcr.io_coredns.tar  k8s.gcr.io_kube-apiserver.tar  k8s.gcr.io_kube-proxy.tar               k8s.gcr.io_kube-scheduler.tar              nginx.tar
 ```
 安装镜像
 ```shell
-docker load -i kube-controller-manager-amd64.tar gcr.io/google_containers/kube-controller-manager-amd64:v1.9.6
-docker load -i kube-apiserver-amd64.tar gcr.io/google_containers/kube-apiserver-amd64:v1.9.6
-docker load -i kube-proxy-amd64.tar gcr.io/google_containers/kube-proxy-amd64:v1.9.6
-docker load -i kube-scheduler-amd64.tar gcr.io/google_containers/kube-scheduler-amd64:v1.9.6
-docker load -i calico_node.tar quay.io/calico/node:v3.0.3
-docker load -i kube-controllers.tar quay.io/calico/kube-controllers:v2.0.1
-docker load -i calico_cni.tar quay.io/calico/cni:v2.0.1
-docker load -i kubernetes-dashboard-amd64.tar k8s.gcr.io/kubernetes-dashboard-amd64:v1.8.3
-docker load -i etcd-amd64.tar gcr.io/google_containers/etcd-amd64:3.1.11
-docker load -i kube-addon-manager.tar gcr.io/google-containers/kube-addon-manager:v6.5
-docker load -i storage-provisioner.tar gcr.io/k8s-minikube/storage-provisioner:v1.8.0
-docker load -i k8s-dns-sidecar-amd64_1.14.7.tar gcr.io/google_containers/k8s-dns-sidecar-amd64:1.14.7
-docker load -i k8s-dns-kube-dns-amd64.tar gcr.io/google_containers/k8s-dns-kube-dns-amd64:1.14.7
-docker load -i k8s-dns-dnsmasq-nanny-amd64.tar gcr.io/google_containers/k8s-dns-dnsmasq-nanny-amd64:1.14.7
-docker load -i k8s-dns-sidecar-amd64_1.14.5.tar k8s.gcr.io/k8s-dns-sidecar-amd64:1.14.5
-docker load -i k8s-dns-kube-dns-amd64.tar k8s.gcr.io/k8s-dns-kube-dns-amd64:1.14.5
-docker load -i k8s-dns-dnsmasq-nanny-amd64.tar k8s.gcr.io/k8s-dns-dnsmasq-nanny-amd64:1.14.5
-docker load -i etcd.tar quay.io/coreos/etcd:v3.1.10
-docker load -i google_containers_pause-amd64.tar gcr.io/google_containers/pause-amd64:3.0
-docker load -i pause-amd64.tar k8s.gcr.io/pause-amd64:3.0
+ls | awk '{print "docker load -i " $1}' | sh -x
+
+[root@just-test ~/images]# ls | awk '{print "docker load -i " $1}' | sh -x
++ docker load -i calico_cni.tar
+Loaded image: calico/cni:v3.6.1
++ docker load -i calico_kube-controllers.tar
+Loaded image: calico/kube-controllers:v3.6.1
++ docker load -i calico_node.tar
+Loaded image: calico/node:v3.6.1
++ docker load -i k8s.gcr.io_coredns.tar
+Loaded image: k8s.gcr.io/coredns:1.3.1
++ docker load -i k8s.gcr.io_etcd.tar
+Loaded image: k8s.gcr.io/etcd:3.3.10
++ docker load -i k8s.gcr.io_kube-apiserver.tar
+Loaded image: k8s.gcr.io/kube-apiserver:v1.14.0
++ docker load -i k8s.gcr.io_kube-controller-manager.tar
+Loaded image: k8s.gcr.io/kube-controller-manager:v1.14.0
++ docker load -i k8s.gcr.io_kube-proxy.tar
+Loaded image: k8s.gcr.io/kube-proxy:v1.14.0
++ docker load -i k8s.gcr.io_kubernetes-dashboard-amd64.tar
+Loaded image: k8s.gcr.io/kubernetes-dashboard-amd64:v1.10.1
++ docker load -i k8s.gcr.io_kube-scheduler.tar
+Loaded image: k8s.gcr.io/kube-scheduler:v1.14.0
++ docker load -i k8s.gcr.io_pause.tar
+Loaded image: k8s.gcr.io/pause:3.1
++ docker load -i nginx.tar
+Loaded image: nginx:latest
 ```
