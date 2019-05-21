@@ -8,11 +8,11 @@
 
 - 机器规划:
 
-| 角色 | 数量 | 配置 | 物理ip | hostname |
-| :------: | :------: | :------: | :------: | :------: |
-| master | 1 | 2核 2g | 192.168.43.252 | k8s-master |
-| node1 | 1 | 2核 2g | 192.168.43.252 | k8s-node1 |
-| node2 | 1 | 2核 2g | 192.168.43.252 | k8s-node2 |
+|  角色  | 数量  |  配置  |     物理ip     |  hostname  |
+| :----: | :---: | :----: | :------------: | :--------: |
+| master |   1   | 2核 2g | 192.168.43.252 | k8s-master |
+| node1  |   1   | 2核 2g | 192.168.43.252 | k8s-node1  |
+| node2  |   1   | 2核 2g | 192.168.43.252 | k8s-node2  |
 
 - 硬件配置参考：CPU 2核或以上，内存2GB或以上。
 - 机器最好都在同一个局域网，在三台机器上都设置好hostname
@@ -47,7 +47,9 @@ echo "* hard memlock  unlimited"  >> /etc/security/limits.conf
 systemctl disable --now firewalld NetworkManager
 setenforce 0
 sed -ri '/^[^#]*SELINUX=/s#=.+$#=disabled#' /etc/selinux/config
-systemctl disable --now dnsmasq
+# swapoff -a && sysctl -w vm.swappiness=0
+# rm -rf $(swapon -s | awk 'NR>1{print $1}')
+# sed -i 's/.*swap.*/#&/' /etc/fstab
 
 sed -i "13i exclude=kernel*" /etc/yum.conf
 yum install epel-release -y
@@ -65,6 +67,7 @@ reboot
 ```shell
 :> /etc/modules-load.d/ipvs.conf
 module=(
+  br_netfilter
   ip_vs
   ip_vs_lc
   ip_vs_wlc
@@ -78,6 +81,7 @@ module=(
   ip_vs_nq
   ip_vs_sed
   ip_vs_ftp
+  nf_conntrack
   )
 for kernel_module in ${module[@]};do
     /sbin/modinfo -F filename $kernel_module |& grep -qv ERROR && echo $kernel_module >> /etc/modules-load.d/ipvs.conf || :
@@ -102,10 +106,8 @@ systemctl status systemd-modules-load.service -l
 加入：
 ```
 # 已经安装好kubernetes环境
-cat << EOL >> /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
-Environment="KUBELET_EXTRA_ARGS=--fail-swap-on=false"
-EOL
-systemctl daemon-reload && systemctl restrt kubelet
+sed "6i Environment="KUBELET_EXTRA_ARGS=--fail-swap-on=false" -i /usr/lib/systemd/system/kubelet.service.d/10-kubeadm.conf
+systemctl daemon-reload && systemctl restart kubelet
 ```
 
 ### 1.4 调整内核参数,解决路由异常
@@ -115,7 +117,6 @@ net.ipv4.ip_forward = 1
 net.bridge.bridge-nf-call-ip6tables = 1
 net.bridge.bridge-nf-call-iptables = 1
 EOF
-modprobe br_netfilter
 sysctl -p /etc/sysctl.d/k8s.conf
 ```
 
@@ -162,7 +163,7 @@ cat << EOF > /etc/docker/daemon.json
         "http://010a79c4.m.daocloud.io",
         "https://docker.mirrors.ustc.edu.cn/"
     ],
-    "insecure-registries": ["harbor.iibu.com","192.168.39.0/24","192.168.43.0/24"],
+    "insecure-registries": ["harbor.iibu.com"],
     "storage-driver": "overlay2",
     "storage-opts": ["overlay2.override_kernel_check=true"],
     "exec-opts": ["native.cgroupdriver=cgroupfs"],
@@ -186,7 +187,7 @@ cat <<EOF > /etc/systemd/system/docker.service.d/http-proxy.conf
 [Service]
 Environment="HTTP_PROXY=http://currycan:shachao123321@192.168.39.88:1080"
 Environment="HTTPS_PROXY=http://currycan:shachao123321@192.168.39.88:1080"
-Environment="NO_PROXY=localhost,127.0.0.1,127.0.0.0/8,harbor.iibu.com,registry.docker-cn.com,8trm4p9x.mirror.aliyuncs.com,registry.cn-hangzhou.aliyuncs.com,docker.mirrors.ustc.edu.cn,010a79c4.m.daocloud.io,192.168.39.0/24,192.168.43.0/24"
+Environment="NO_PROXY=localhost,127.0.0.1,127.0.0.0/8,harbor.iibu.com,registry.docker-cn.com,8trm4p9x.mirror.aliyuncs.com,registry.cn-hangzhou.aliyuncs.com,docker.mirrors.ustc.edu.cn,010a79c4.m.daocloud.io"
 EOF
 systemctl daemon-reload && systemctl restart docker
 systemctl show --property=Environment docker
@@ -207,8 +208,24 @@ gpgkey=https://mirrors.aliyun.com/kubernetes/yum/doc/yum-key.gpg https://mirrors
 EOF
 
 yum install -y kubelet kubeadm kubectl --disableexcludes=kubernetes
+source <(kubectl completion bash)
+source <(kubeadm completion bash)
+echo "source <(kubectl completion bash)" >> ~/.bashrc
+echo "source <(kubeadm completion bash)" >> ~/.bashrc
+
 sed '5i Environment="KUBELET_CGROUP_ARGS=--cgroup-driver=cgroupfs"' -i /usr/lib/systemd/system/kubelet.service.d/10-kubeadm.conf
+sed '6i Environment="KUBELET_EXTRA_ARGS=--fail-swap-on=false"' -i /usr/lib/systemd/system/kubelet.service.d/10-kubeadm.conf
+
+# 如果失败执行
+DOCKER_CGROUPS=$(docker info | grep 'Cgroup' | cut -d' ' -f3)
+cat >/etc/sysconfig/kubelet<<EOF
+KUBELET_CGROUP_ARGS="--cgroup-driver=$DOCKER_CGROUPS"
+KUBELET_EXTRA_ARGS="--fail-swap-on=false"
+EOF
+sed -e 's/^Environment="KUBELET_CGROUP_ARGS=.*/Environment="KUBELET_CGROUP_ARGS=--cgroup-driver=cgroupfs"/g' -i /usr/lib/systemd/system/kubelet.service.d/10-kubeadm.conf
+
 systemctl enable kubelet
+systemctl daemon-reload && systemctl restart kubelet
 ```
 注意，这里不需要启动kubelet，初始化的过程中会自动启动的，如果此时启动了会出现如下报错，忽略即可。日志在tail -f /var/log/messages
 ```
@@ -576,6 +593,9 @@ sudo chown $(id -u):$(id -g) $HOME/.kube/config
 export KUBECONFIG=/etc/kubernetes/admin.conf
 echo "export KUBECONFIG=/etc/kubernetes/admin.conf" >> ~/.bash_profile
 source  ~/.bash_profile
+
+# 单节点执行，允许master节点被调度
+kubectl taint nodes --all node-role.kubernetes.io/master-
 ```
 
 ###3.2 将worker节点加入集群（此部分来源于网络）
@@ -666,7 +686,8 @@ unable to recognize "https://docs.projectcalico.org/v3.6/getting-started/kuberne
 
 要docker之间能互相通信需要做些配置，这里用calico来实现,详细可以参看官网很详尽。[Quickstart for Calico on Kubernetes](https://docs.projectcalico.org/v3.6/getting-started/kubernetes/)
 ```shell
-[root@just-test ~]# kubectl apply -f https://docs.projectcalico.org/v3.6/getting-started/kubernetes/installation/hosted/kubernetes-datastore/calico-networking/1.7/calico.yaml
+# kubectl apply -f https://docs.projectcalico.org/v3.7/manifests/calico.yaml
+[root@just-test ~]# kubectl apply -f kubernetes-datastore/calico-networking/1.7/calico.yaml
 configmap/calico-config created
 customresourcedefinition.apiextensions.k8s.io/felixconfigurations.crd.projectcalico.org created
 customresourcedefinition.apiextensions.k8s.io/ipamblocks.crd.projectcalico.org created
