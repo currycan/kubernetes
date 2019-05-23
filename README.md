@@ -216,6 +216,12 @@ echo "source <(kubeadm completion bash)" >> ~/.bashrc
 sed '5i Environment="KUBELET_CGROUP_ARGS=--cgroup-driver=cgroupfs"' -i /usr/lib/systemd/system/kubelet.service.d/10-kubeadm.conf
 sed '6i Environment="KUBELET_EXTRA_ARGS=--fail-swap-on=false"' -i /usr/lib/systemd/system/kubelet.service.d/10-kubeadm.conf
 
+cat << EOF > /etc/sysconfig/kubelet
+KUBELET_CGROUP_ARGS="--cgroup-driver=cgroupfs"
+KUBELET_EXTRA_ARGS="--fail-swap-on=false"
+KUBE_PROXY=MODE=ipvs
+EOF
+
 # 如果失败执行
 DOCKER_CGROUPS=$(docker info | grep 'Cgroup' | cut -d' ' -f3)
 cat >/etc/sysconfig/kubelet<<EOF
@@ -495,6 +501,7 @@ DynamicKubeletConfig=true|false (当前为BETA状态 - 缺省值=false)
 在master上开始初始化,通过kubeadm init命令来初始化，指定一下kubernetes版本，并设置一下pod-network-cidr。此过程，需要从google cloud下载镜像，前面步骤中已做了镜像下载，完成后如下：
 
 ```shell
+# kubeadm init --apiserver-advertise-address=10.177.37.90 --pod-network-cidr=10.88.0.0/16 --kubernetes-version=v1.14.2 --image-repository=registry.cn-hangzhou.aliyuncs.com/google_containers/ --ignore-preflight-errors=Swap --dry-run
 [root@just-test ~]# kubeadm init --kubernetes-version=v1.14.0 --apiserver-advertise-address=192.168.43.252 --pod-network-cidr=10.244.0.0/16
 [init] Using Kubernetes version: v1.14.0
 [preflight] Running pre-flight checks
