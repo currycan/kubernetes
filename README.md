@@ -419,7 +419,7 @@ kubeadm init --config kubeadm.conf
 ```
 更多kubeadm配置文件参数详见
 ```shell
-kubeadm config print-defaults
+kubeadm config print init-defaults
 ```
 
 ## 3. 在master上配置
